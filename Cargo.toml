@@ -1,0 +1,13 @@
+[package]
+name = "async_rust"
+version = "0.1.0"
+authors = ["Harrison Burt <57491488+ChillFish8@users.noreply.github.com>"]
+edition = "2018"
+
+[lib]
+name = "async_rust"
+crate-type = ["cdylib"]
+
+[dependencies.pyo3]
+version = "0.12.1"
+features = ["extension-module"]
