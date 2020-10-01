@@ -14,9 +14,12 @@ def gen(a):
 
 
 async def t():
-    loop.call_later(1, gen, "a")
+    # loop.call_later(1, gen, "a")
     print(await async_rust.AsyncServerRunner("127.0.0.1:8080"))
-    await asyncio.sleep(3)
+    # await asyncio.sleep(3)
+
+    fut = asyncio.get_event_loop().create_future()
+    fut.__iter__().__next__()
 
 loop = asyncio.get_event_loop()
 # loop.set_debug(True)

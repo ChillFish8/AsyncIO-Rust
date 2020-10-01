@@ -13,6 +13,7 @@ use std::io;
 use std::borrow::{Borrow, BorrowMut};
 use pyo3::class::iter::IterNextOutput::Yield;
 
+
 ///
 /// This is essentially the same as:
 ///
@@ -21,14 +22,9 @@ use pyo3::class::iter::IterNextOutput::Yield;
 /// or
 /// yield from asyncio.sleep(delay)
 ///
-fn async_sleep(py: Python, delay: f64) -> PyResult<Py<PyAny>> {
+fn get_loop(py: Python) -> PyResult<&PyAny> {
     let asyncio = py.import("asyncio")?;
-    Ok(
-        asyncio
-            .call1("sleep", (delay,))?
-            .call_method0("__await__")?
-            .into_py(py)
-    )
+    Ok(asyncio.call0("get_event_loop")?)
 }
 
 struct AsyncServer {
@@ -68,7 +64,8 @@ struct AsyncServerRunner {
     server: AsyncServer,
     server_state: u8,
     server_exit: bool,
-    sleep_fut: Option<Py<PyAny>>,
+    loop_: PyObject,
+    fut: Option<Py<PyAny>>,
 }
 
 #[pymethods]
@@ -78,12 +75,59 @@ impl AsyncServerRunner {
         println!("Connecting to {}", &binding_addr);
 
         let server = AsyncServer::new(binding_addr.clone());
+        let loop_ = {
+            let gil = Python::acquire_gil();
+            let py = gil.python();
+            get_loop(py).unwrap().into_py(py)
+        };
+
         AsyncServerRunner {
             addr: binding_addr,
             server,
             server_state: 0,
             server_exit: false,
-            sleep_fut: None,
+            loop_,
+            fut: None,
+        }
+    }
+
+    fn _sleep(&mut self, py: Python) -> PyResult<()> {
+        self.fut = Option::from(self.loop_.call_method0(py, "create_future")?);
+
+        let futures = py.import("asyncio")?.get("futures")?;
+        let _ = self.loop_.call_method1(
+            py,
+            "call_later",
+            (1, futures.getattr("_set_result_unless_cancelled")?, self.fut.as_ref(), "")
+        );
+
+        self.fut = Option::from(self.fut.as_ref().unwrap().call_method0(py, "__iter__")?);
+
+        Ok(())
+    }
+
+    fn _iter_sleep(&mut self) -> Option<PyObject> {
+        let gil = Python::acquire_gil();
+        let py = gil.python();
+
+        // if the future isnt set we'll create a new one
+        if self.fut.is_none() {
+            self._sleep(py);
+        }
+
+        let nxt = self.fut
+            .as_ref()
+            .unwrap()
+            .call_method0(py, "__next__");
+
+        return match nxt {
+            Ok(f) => Some(f),
+            Err(er) => {
+                self.server_state = 1;
+                self.fut = None;
+
+                None
+            },
         }
     }
 }
@@ -101,8 +145,6 @@ impl PyIterProtocol for AsyncServerRunner {
         slf
     }
     fn __next__(mut slf: PyRefMut<Self>) -> PyResult<IterNextOutput<Option<PyObject>, Option<PyObject>>> {
-        println!("call?");
-
         // setup futures
         if slf.server_state == 0 {
 
@@ -119,42 +161,23 @@ impl PyIterProtocol for AsyncServerRunner {
             if slf.server_exit {
                 return Ok(IterNextOutput::Return(None))
             }
+
+            // Lets change our sleep so we sleep for a bit
             slf.server_state = 2;
         }
 
         // Sleep x time (save cpu)
         if slf.server_state == 2 {
-            let gil = Python::acquire_gil();
-
-            // If the future is None we'll create the sleep task
-            if slf.sleep_fut.is_none() {
-                let py = gil.python();
-                slf.sleep_fut = Some(async_sleep(py, 0.1)?);
-            }
-
-            let py = gil.python();
-
-            // get the next iteration of the future
-            let nxt = slf.sleep_fut
-                .as_ref()
-                .unwrap()
-                .call_method0(py, "__next__");
-
-            return match nxt {
-                Ok(n) => {
-                    Ok(IterNextOutput::Yield(Some(n)))
-                },
-                Err(_) => {
-                    slf.server_state = 1;
-                    Ok(IterNextOutput::Yield(None))
-                }
-            };
-
+            return Ok(IterNextOutput::Yield(slf._iter_sleep()))
         }
 
         // Invalid state
         return Ok(IterNextOutput::Return(None))
     }
+
+
+
+
 }
 
 
