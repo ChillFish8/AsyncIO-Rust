@@ -4,6 +4,7 @@ use pyo3::class::pyasync::PyAsyncProtocol;
 use pyo3::class::iter::IterNextOutput;
 use std::net::{TcpListener, TcpStream};
 use std::io;
+use std::iter::Once;
 
 
 ///
@@ -63,12 +64,13 @@ struct AsyncServerRunner {
     loop_: PyObject,
     fut: Option<Py<PyAny>>,
     internal_clock_delay: f32,
+    callback: PyObject,
 }
 
 #[pymethods]
 impl AsyncServerRunner {
     #[new]
-    fn new(binding_addr: String) -> Self {
+    fn new(binding_addr: String, callback: PyObject) -> Self {
         println!("Connecting to {}", &binding_addr);
 
         let server = AsyncServer::new(binding_addr);
@@ -85,6 +87,7 @@ impl AsyncServerRunner {
             loop_,
             fut: None,
             internal_clock_delay: 0.05,
+            callback,
         }
     }
 }
@@ -162,15 +165,23 @@ impl PyIterProtocol for AsyncServerRunner {
         // yield futures
         if slf.server_state == 1 {
             let thing = slf.server.accept_client();
+            if thing.is_some() {
+
+                // todo create task then parse stuff.
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+                let asyncio = py.import("asyncio")?;
+                let caller = OnceFuture::new(Stream::new(thing.unwrap()));
+                let task = asyncio.call1( "ensure_future", (caller,))?;
+
+                println!("I think this has worked???");
+                return Ok(IterNextOutput::Yield(None))
+            }
 
             if slf.server_exit {
                 return Ok(IterNextOutput::Return(None))
             }
 
-            if thing.is_some() {
-                println!("client {:?}", thing);
-                return Ok(IterNextOutput::Yield(None))
-            }
             // Lets change our sleep so we sleep for a bit
             slf.server_state = 2;
         }
@@ -186,8 +197,83 @@ impl PyIterProtocol for AsyncServerRunner {
 }
 
 
+struct Stream {
+    internal_stream: Option<TcpStream>
+}
+
+impl Stream {
+    fn new(stream: TcpStream) -> Self {
+        Self {
+            internal_stream: Some(stream)
+        }
+    }
+}
+
+impl Clone for Stream {
+    fn clone(&self) -> Self {
+        Self {
+            internal_stream: Some(
+                self.internal_stream
+                    .as_ref()
+                    .unwrap()
+                    .try_clone()
+                    .unwrap(),
+            )
+        }
+    }
+}
+
+impl pyo3::conversion::FromPyObject<'_> for Stream {
+    fn extract(_ob: &PyAny) -> PyResult<Self> {
+        Ok(Self {
+            internal_stream: None
+        })
+    }
+}
+
+
+/// Wraps a Python future and yield it once.
+#[pyclass]
+struct OnceFuture {
+    stream: Stream,
+}
+
+#[pymethods]
+impl OnceFuture {
+    #[new]
+    fn new(stream: Stream) -> Self {
+        println!("I work daddy!");
+        OnceFuture {
+            stream,
+        }
+    }
+}
+
+#[pyproto]
+impl PyAsyncProtocol for OnceFuture {
+    fn __await__(slf: PyRef<Self>) -> PyRef<Self> {
+        slf
+    }
+}
+
+#[pyproto]
+impl PyIterProtocol for OnceFuture {
+    fn __iter__(slf: PyRef<Self>) -> PyRef<Self> {
+        slf
+    }
+    fn __next__(_slf: PyRefMut<Self>) -> IterNextOutput<Option<PyObject>, Option<PyObject>> {
+        println!("Being called and yielded...");
+        IterNextOutput::Return(None)
+    }
+}
+
+
+///
+/// Wraps all our existing pyobjects together in the module
+///
 #[pymodule]
 fn async_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<AsyncServerRunner>()?;
+    m.add_class::<OnceFuture>()?;
     Ok(())
 }

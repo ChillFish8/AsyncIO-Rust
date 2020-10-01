@@ -8,14 +8,12 @@ class AsyncIoCoroutine:
     pass
 
 
-def gen(a):
+async def gen():
     print("name")
-
-
 
 async def t():
     # loop.call_later(1, gen, "a")
-    print(await async_rust.AsyncServerRunner("127.0.0.1:8080"))
+    print(await async_rust.AsyncServerRunner("127.0.0.1:8080", async_rust.OnceFuture))
     # await asyncio.sleep(3)
 
     fut = asyncio.get_event_loop().create_future()
