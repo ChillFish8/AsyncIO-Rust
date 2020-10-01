@@ -2,9 +2,14 @@ use pyo3::prelude::*;
 use pyo3::PyIterProtocol;
 use pyo3::class::pyasync::PyAsyncProtocol;
 use pyo3::class::iter::IterNextOutput;
+
 use std::net::{TcpListener, TcpStream};
 use std::io;
-use std::iter::Once;
+use std::io::prelude::*;
+
+use http::header::HeaderMap;
+
+use bytes::{BytesMut, BufMut};
 
 
 ///
@@ -58,13 +63,17 @@ impl AsyncServer {
 ///
 #[pyclass]
 struct AsyncServerRunner {
+    // External inputs
+    callback: PyObject,
+
+    // Internal systems
     server: AsyncServer,
     server_state: u8,
     server_exit: bool,
     loop_: PyObject,
     fut: Option<Py<PyAny>>,
     internal_clock_delay: f32,
-    callback: PyObject,
+
 }
 
 #[pymethods]
@@ -197,6 +206,14 @@ impl PyIterProtocol for AsyncServerRunner {
 }
 
 
+///
+/// This struct is hell, litterally. It creates a 'false' Clone
+/// implementation to allow Pyo3 to use it. This should NOT be allowed
+/// to be accessible as a public interface because this ignores some required
+/// functions like extract to convert pyobjects into it.
+///
+/// This is a one way Object only.
+///
 struct Stream {
     internal_stream: Option<TcpStream>
 }
@@ -232,19 +249,25 @@ impl pyo3::conversion::FromPyObject<'_> for Stream {
 }
 
 
-/// Wraps a Python future and yield it once.
+/// Wraps a Python future and TCP stream
 #[pyclass]
 struct OnceFuture {
+    // External parameters
     stream: Stream,
+
+
+    // Internals
+    state: u8,
+
 }
 
 #[pymethods]
 impl OnceFuture {
     #[new]
     fn new(stream: Stream) -> Self {
-        println!("I work daddy!");
         OnceFuture {
             stream,
+            state: 0,
         }
     }
 }
@@ -261,11 +284,34 @@ impl PyIterProtocol for OnceFuture {
     fn __iter__(slf: PyRef<Self>) -> PyRef<Self> {
         slf
     }
-    fn __next__(_slf: PyRefMut<Self>) -> IterNextOutput<Option<PyObject>, Option<PyObject>> {
-        println!("Being called and yielded...");
-        IterNextOutput::Return(None)
+    fn __next__(
+        slf: PyRefMut<Self>) -> PyResult<IterNextOutput<Option<PyObject>, Option<PyObject>>> {
+
+        let thing = parse_partial(
+            slf.stream.internal_stream.as_ref().unwrap())?;
+        println!("{:?}", thing);
+
+
+        Ok(IterNextOutput::Return(None))
     }
 }
+
+#[pyclass]
+struct HTTPRequest {
+    method: &'static str,
+    headers: HeaderMap,
+    body: &'static str,
+}
+
+///
+/// Parses a tcp stream reading the headers; repeat until complete
+///
+fn parse_partial(mut stream: &TcpStream) -> PyResult<()> {
+    Ok(())
+
+}
+
+
 
 
 ///
