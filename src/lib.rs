@@ -125,18 +125,31 @@ impl PyIterProtocol for AsyncServerRunner {
         // Sleep x time (save cpu)
         if slf.server_state == 2 {
             let gil = Python::acquire_gil();
-            if slf.sleep_fut.is_some() {
+
+            // If the future is None we'll create the sleep task
+            if slf.sleep_fut.is_none() {
                 let py = gil.python();
                 slf.sleep_fut = Some(async_sleep(py, 0.1)?);
             }
 
             let py = gil.python();
+
+            // get the next iteration of the future
             let nxt = slf.sleep_fut
                 .as_ref()
                 .unwrap()
-                .call_method0(py, "__next__")?;
+                .call_method0(py, "__next__");
 
-            return Ok(IterNextOutput::Yield(None))
+            return match nxt {
+                Ok(n) => {
+                    Ok(IterNextOutput::Yield(Some(n)))
+                },
+                Err(_) => {
+                    slf.server_state = 1;
+                    Ok(IterNextOutput::Yield(None))
+                }
+            };
+
         }
 
         // Invalid state
