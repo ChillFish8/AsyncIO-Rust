@@ -90,19 +90,21 @@ struct AsyncServerRunner {
 
 }
 
-///
-/// PythonMethod: AsyncServerRunner::new() -> Self
-/// 
-///     new() creates the AsyncServer instance and aquires the asyncio
-///     event loop, default state is set to `0`, server exit `false`,
-///     clock delay `0.05`.
-/// 
-///     Requires:
-///         - binding_addr: String
-///         - callback:     PyObject
-///
+
 #[pymethods]
 impl AsyncServerRunner {
+
+    ///
+    /// PythonMethod: AsyncServerRunner::new() -> Self
+    /// 
+    ///     new() creates the AsyncServer instance and aquires the asyncio
+    ///     event loop, default state is set to `0`, server exit `false`,
+    ///     clock delay `0.05`.
+    /// 
+    ///     Requires:
+    ///         - binding_addr: String
+    ///         - callback:     PyObject
+    ///
     #[new]
     fn new(binding_addr: String, callback: PyObject) -> Self {
         println!("Connecting to {}", &binding_addr);
@@ -179,9 +181,10 @@ impl AsyncServerRunner {
     /// 
     /// Internal Method: AsyncServerRunner._iter_sleep() -> Option<PyObject>
     ///    
-    ///     iter_sleep is what actually 
-    ///     
-    ///     
+    ///     _iter_sleep is what actually yields the next iteration the future,
+    ///     you could interprete this has `yield from` in python just with more
+    ///     steps involved.
+    /// 
     fn _iter_sleep(&mut self) -> Option<PyObject> {
         let gil = Python::acquire_gil();
         let py = gil.python();
@@ -208,6 +211,10 @@ impl AsyncServerRunner {
     }
 }
 
+/// 
+/// This implementation adds the required __await__ dunder for
+/// python to use a coroutine, it just simply returns itself
+/// 
 #[pyproto]
 impl PyAsyncProtocol for AsyncServerRunner {
     fn __await__(slf: PyRef<Self>) -> PyRef<Self> {
@@ -215,11 +222,37 @@ impl PyAsyncProtocol for AsyncServerRunner {
     }
 }
 
+///
+/// This applies the iterator magic methods for producing a coroutine,
+/// becauase asyncio is built entirely off of generators to give concurrency
+/// we much build our objects top behaving like generators aswell, hence the use
+/// of the IterProtocol.
+/// 
 #[pyproto]
 impl PyIterProtocol for AsyncServerRunner {
+
+    /// 
+    /// Iter is just a required dunder so we return ourselves as the 
+    /// iterator.
+    /// 
     fn __iter__(slf: PyRef<Self>) -> PyRef<Self> {
         slf
     }
+
+    /// 
+    /// __next__ is what does all the actual work, this gets called every time by the event
+    /// loop, Pyo3 gives us some useful helpers to replicate what yield and Return do.
+    /// 
+    /// If we yield it tells the event loop we still have something todo and we'll get called again
+    /// this is useful if we plan on making a loop at anypoint because we cannot just do a standard 
+    /// loop otherwise we would block.
+    /// 
+    /// when `server_state` is 0 we can use this to setup anything before yielding from another coro
+    /// or in this case polling the server listener.
+    /// 
+    /// when `server_state` is 1 we poll our listener for a client or None, this is what is actually
+    /// yielding everything other than if we set to state 2 where we sleep for x time.
+    /// 
     fn __next__(mut slf: PyRefMut<Self>) -> PyResult<IterNextOutput<Option<PyObject>, Option<PyObject>>> {
         // setup futures
         if slf.server_state == 0 {
@@ -229,6 +262,8 @@ impl PyIterProtocol for AsyncServerRunner {
         // yield futures
         if slf.server_state == 1 {
             let thing = slf.server.accept_client();
+
+            // if we have a client connecting we will get it as Some()
             if thing.is_some() {
 
                 // todo create task then parse stuff.
@@ -241,7 +276,8 @@ impl PyIterProtocol for AsyncServerRunner {
                 println!("I think this has worked???");
                 return Ok(IterNextOutput::Yield(None))
             }
-
+            
+            // Should we stop the server?
             if slf.server_exit {
                 return Ok(IterNextOutput::Return(None))
             }
@@ -283,6 +319,9 @@ impl Stream {
 
 impl Clone for Stream {
     fn clone(&self) -> Self {
+        // We'll just try clone this and hope it works
+        // note: I have no idea what issues this can cause
+        //       later on so...
         Self {
             internal_stream: Some(
                 self.internal_stream
@@ -297,6 +336,7 @@ impl Clone for Stream {
 
 impl pyo3::conversion::FromPyObject<'_> for Stream {
     fn extract(_ob: &PyAny) -> PyResult<Self> {
+        // Cant recreate a listener like this.
         Ok(Self {
             internal_stream: None
         })
@@ -363,10 +403,7 @@ struct HTTPRequest {
 ///
 fn parse_partial(mut stream: &TcpStream) -> PyResult<()> {
     Ok(())
-
 }
-
-
 
 
 ///

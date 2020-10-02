@@ -2,3 +2,4 @@
 Cargo.lock
 /venv/
 /.idea
+.vscode/settings.json
