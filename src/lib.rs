@@ -24,6 +24,21 @@ fn get_loop(py: Python) -> PyResult<&PyAny> {
     Ok(asyncio.call0("get_event_loop")?)
 }
 
+///
+/// AsynServer represents the actual Rust TCP listener 
+/// it initially binds to the address on creation with new(),
+/// accept_client() can be called to get the next tcp stream,
+/// because this is for asyncio we want this to be non-blocking so
+/// we set none-blocking on the socket. accept_client will return 
+/// either None or a TcpStream.
+/// 
+/// ```
+/// let server = AsyncServer::new("127.0.0.1:8080");
+/// 
+/// let next_client = server.accept_client();
+/// println!("{:?}", next_client);
+/// ```
+///  
 struct AsyncServer {
     listener: TcpListener,
 }
@@ -66,15 +81,26 @@ struct AsyncServerRunner {
     callback: PyObject,
 
     // Internal systems
-    server: AsyncServer,
-    server_state: u8,
-    server_exit: bool,
-    loop_: PyObject,
-    fut: Option<Py<PyAny>>,
-    internal_clock_delay: f32,
+    server: AsyncServer,        // The non-blocking TCP listener Struct
+    server_state: u8,           // A int representing the asyncio state, either 0, 1, 2 or Error
+    server_exit: bool,          // A bool to signal if the server should shutdown and return
+    loop_: PyObject,            // The asyncio event loop
+    fut: Option<Py<PyAny>>,     // The temporary future to house the sleep future to save CPU
+    internal_clock_delay: f32,  // the delay between loop iterations.
 
 }
 
+///
+/// PythonMethod: AsyncServerRunner::new() -> Self
+/// 
+///     new() creates the AsyncServer instance and aquires the asyncio
+///     event loop, default state is set to `0`, server exit `false`,
+///     clock delay `0.05`.
+/// 
+///     Requires:
+///         - binding_addr: String
+///         - callback:     PyObject
+///
 #[pymethods]
 impl AsyncServerRunner {
     #[new]
@@ -100,7 +126,31 @@ impl AsyncServerRunner {
     }
 }
 
+
+///  
+/// This implementation houses the intenal functions for creating a non-blocking
+/// delay on the event loop to save cpu.
+///   
 impl AsyncServerRunner {
+
+    /// 
+    /// Internal Method: AsyncServerRunner._sleep() -> PyResult<()>
+    ///     
+    ///     _sleep recreated what asyncio.sleep() does, internally
+    ///     it calls loop.create_future() on the running event loop, aquires the 
+    ///     asyncio.futures module, and then calles loop.call_later() using
+    ///     `AsyncServerRunner.internal_clock_delay` as the delay to then invoke
+    ///     future's private method `_set_result_unless_cancelled`. After the future
+    ///     has been set we just set the future to the iterator to yeild from.
+    ///     
+    ///     Note:
+    ///         I used `_set_result_unless_cancelled` because I was getting
+    ///         a error or it just not waiting at all with set_result or using
+    ///         a normal callback, this system is just a plain copy of asyncio.sleep.
+    ///         
+    ///     Requires:
+    ///         - py: Python
+    /// 
     fn _sleep(&mut self, py: Python) -> PyResult<()> {
         self.fut = Option::from(self.loop_.call_method0(py, "create_future")?);
 
@@ -126,6 +176,12 @@ impl AsyncServerRunner {
         Ok(())
     }
 
+    /// 
+    /// Internal Method: AsyncServerRunner._iter_sleep() -> Option<PyObject>
+    ///    
+    ///     iter_sleep is what actually 
+    ///     
+    ///     
     fn _iter_sleep(&mut self) -> Option<PyObject> {
         let gil = Python::acquire_gil();
         let py = gil.python();
