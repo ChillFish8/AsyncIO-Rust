@@ -6,10 +6,9 @@ use pyo3::class::iter::IterNextOutput;
 use std::net::{TcpListener, TcpStream};
 use std::io;
 use std::io::prelude::*;
-
-use http::header::HeaderMap;
-
-use bytes::{BytesMut, BufMut};
+use std::collections::HashMap;
+use bstr::ByteSlice;
+use std::iter::FromIterator;
 
 
 ///
@@ -380,29 +379,66 @@ impl PyIterProtocol for OnceFuture {
         slf
     }
     fn __next__(
-        slf: PyRefMut<Self>) -> PyResult<IterNextOutput<Option<PyObject>, Option<PyObject>>> {
+        slf: PyRefMut<Self>) -> PyResult<IterNextOutput<Option<PyObject>, Option<(String, String, String, HashMap<String, String>)>>> {
 
-        let thing = parse_partial(
+        let (method, path, protocol, headers) = parse_partial(
             slf.stream.internal_stream.as_ref().unwrap())?;
         println!("{:?}", thing);
 
-
-        Ok(IterNextOutput::Return(None))
+        Ok(IterNextOutput::Return(Some(thing)))
     }
 }
 
 #[pyclass]
+#[derive(Debug)]
 struct HTTPRequest {
     method: &'static str,
-    headers: HeaderMap,
-    body: &'static str,
+    path: &'static str,
+    protocol: &'static str,
+    headers: HashMap<String, String>,
 }
 
 ///
 /// Parses a tcp stream reading the headers; repeat until complete
-///
-fn parse_partial(mut stream: &TcpStream) -> PyResult<()> {
-    Ok(())
+/// todo: add a better parser
+fn parse_partial(mut stream: &TcpStream) -> PyResult<(String, String, String, HashMap<String, String>)> {
+    let mut reader = io::BufReader::new(stream);
+
+    const MAX_HEADER_COUNT: usize = 32;
+
+    let mut headers: HashMap<String, String> = HashMap::default();
+    let mut method = String::new();
+    let mut path= String::new();
+    let mut protocol= String::new();
+
+    for i in 0..MAX_HEADER_COUNT {
+        let mut buff = Vec::with_capacity(1024);
+        let n = reader.read_until(b'\n', &mut buff)?;
+        let _ = buff.split_off(n-2);
+        if &buff == b"" {
+            break
+        }
+
+        if i != 0 {
+            let mut iter = buff.splitn_str(2, b": ");
+            headers.insert(
+                String::from_utf8(
+                    Vec::from(iter.next().unwrap())
+                )?,
+                String::from_utf8(
+                    Vec::from(iter.next().unwrap().trim_start())
+                )?
+            );
+        } else {
+            let mut items =  buff.split_str( b" ").into_iter();
+
+            method = String::from_utf8_lossy(items.next().unwrap()).parse()?;
+            path = String::from_utf8_lossy(items.next().unwrap()).parse()?;
+            protocol = String::from_utf8_lossy(items.next().unwrap()).parse()?;
+        }
+    }
+
+    Ok((method, path, protocol, headers))
 }
 
 

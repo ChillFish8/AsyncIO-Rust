@@ -13,5 +13,6 @@ version = "0.12.1"
 features = ["extension-module"]
 
 [dependencies]
-http = "0.2"
 bytes = "0.5.6"
+bstr = "0.2.13"
+
