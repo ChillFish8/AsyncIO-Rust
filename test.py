@@ -13,7 +13,7 @@ async def gen():
 
 async def t():
     # loop.call_later(1, gen, "a")
-    print(await async_rust.AsyncServerRunner("127.0.0.1:8080", async_rust.OnceFuture))
+    print(await async_rust.AsyncServerRunner("0.0.0.0:8080", async_rust.OnceFuture))
     # await asyncio.sleep(3)
 
     fut = asyncio.get_event_loop().create_future()

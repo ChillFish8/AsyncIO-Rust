@@ -8,7 +8,6 @@ use std::io;
 use std::io::prelude::*;
 use std::collections::HashMap;
 use bstr::ByteSlice;
-use std::iter::FromIterator;
 
 
 ///
@@ -121,7 +120,7 @@ impl AsyncServerRunner {
             server_exit: false,
             loop_,
             fut: None,
-            internal_clock_delay: 0.05,
+            internal_clock_delay: 0.01,
             callback,
         }
     }
@@ -260,19 +259,20 @@ impl PyIterProtocol for AsyncServerRunner {
 
         // yield futures
         if slf.server_state == 1 {
-            let thing = slf.server.accept_client();
+            let client = slf.server.accept_client();
 
             // if we have a client connecting we will get it as Some()
-            if thing.is_some() {
+            if client.is_some() {
 
                 // todo create task then parse stuff.
+                let cli = client.unwrap();
+                cli.set_nonblocking(true);
                 let gil = Python::acquire_gil();
                 let py = gil.python();
                 let asyncio = py.import("asyncio")?;
-                let caller = OnceFuture::new(Stream::new(thing.unwrap()));
-                let task = asyncio.call1( "ensure_future", (caller,))?;
+                let caller = OnceFuture::new(Stream::new(cli));
+                let _task = asyncio.call1( "ensure_future", (caller,))?;
 
-                println!("I think this has worked???");
                 return Ok(IterNextOutput::Yield(None))
             }
             
@@ -350,6 +350,7 @@ struct OnceFuture {
     stream: Stream,
 
 
+
     // Internals
     state: u8,
 
@@ -379,13 +380,13 @@ impl PyIterProtocol for OnceFuture {
         slf
     }
     fn __next__(
-        slf: PyRefMut<Self>) -> PyResult<IterNextOutput<Option<PyObject>, Option<(String, String, String, HashMap<String, String>)>>> {
+        slf: PyRefMut<Self>) -> PyResult<IterNextOutput<Option<PyObject>, Option<PyObject>>> { // PyResult<IterNextOutput<Option<PyObject>, Option<(String, String, String, HashMap<String, String>)>>> {
 
-        let (method, path, protocol, headers) = parse_partial(
-            slf.stream.internal_stream.as_ref().unwrap())?;
-        println!("{:?}", thing);
+        //let parsed = parse_partial(
+        //    slf.stream.internal_stream.as_ref().unwrap())?;
+        let _ = slf.stream.internal_stream.as_ref().unwrap().write_all(b"HTTP/1.1 200 OK\r\n\r\n");
 
-        Ok(IterNextOutput::Return(Some(thing)))
+        Ok(IterNextOutput::Return(None))
     }
 }
 
@@ -401,7 +402,7 @@ struct HTTPRequest {
 ///
 /// Parses a tcp stream reading the headers; repeat until complete
 /// todo: add a better parser
-fn parse_partial(mut stream: &TcpStream) -> PyResult<(String, String, String, HashMap<String, String>)> {
+fn parse_partial(stream: &TcpStream) -> PyResult<(String, String, String, HashMap<String, String>)> {
     let mut reader = io::BufReader::new(stream);
 
     const MAX_HEADER_COUNT: usize = 32;
@@ -414,7 +415,7 @@ fn parse_partial(mut stream: &TcpStream) -> PyResult<(String, String, String, Ha
     for i in 0..MAX_HEADER_COUNT {
         let mut buff = Vec::with_capacity(1024);
         let n = reader.read_until(b'\n', &mut buff)?;
-        let _ = buff.split_off(n-2);
+        let _ = buff.split_off(if n >= 2 {n-2} else {0});
         if &buff == b"" {
             break
         }
