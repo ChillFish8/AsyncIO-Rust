@@ -13,12 +13,11 @@ use bytes::{BytesMut, BufMut};
 
 
 ///
-/// This is essentially the same as:
-///
-///
-/// await asyncio.sleep(delay)
-/// or
-/// yield from asyncio.sleep(delay)
+/// just aquires the event loop by import asyncio 
+/// and then calling get_event_loop()
+/// this is equivelent to loop = asyncio.get_event_loop()
+/// in python returning a result should asyncio not exist 
+/// (just a rust thing)
 ///
 fn get_loop(py: Python) -> PyResult<&PyAny> {
     let asyncio = py.import("asyncio")?;
